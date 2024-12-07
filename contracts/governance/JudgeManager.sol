@@ -15,19 +15,35 @@ contract JudgeManager is JudgeManagerStorage, IJudgeManager {
         _;
     }
 
-    function addJudge(address _judge) external override {
+    function addJudge(address _judge, bool _isHuman) external override {
         if (msg.sender != owner) revert OnlyOwner();
         if (judges[_judge]) revert AlreadyJudge();
+        
         judges[_judge] = true;
+        isHumanJudge[_judge] = _isHuman;
         judgeCount++;
+        judgeList.push(_judge);
+        
         emit JudgeAdded(_judge);
     }
 
     function removeJudge(address _judge) external override {
         if (msg.sender != owner) revert OnlyOwner();
         if (!judges[_judge]) revert NotJudge();
+        
         judges[_judge] = false;
+        isHumanJudge[_judge] = false;
         judgeCount--;
+        
+        // Remove from judgeList (optional, but gas intensive)
+        for (uint256 i = 0; i < judgeList.length; i++) {
+            if (judgeList[i] == _judge) {
+                judgeList[i] = judgeList[judgeList.length - 1];
+                judgeList.pop();
+                break;
+            }
+        }
+        
         emit JudgeRemoved(_judge);
     }
 
@@ -169,5 +185,34 @@ contract JudgeManager is JudgeManagerStorage, IJudgeManager {
 
     function getDisputeCount() public view returns (uint256) {
         return disputeCount;
+    }
+    
+    function getHumanJudgesForDispute(uint256 _disputeId) external view returns (address[] memory) {
+        Dispute storage dispute = disputes[_disputeId];
+        
+        // First, count how many human judges voted
+        uint256 humanJudgeCount = 0;
+        address[] memory tempJudges = new address[](judgeCount);
+        
+        // Iterate through all judges to find human judges who voted
+        for (uint256 i = 0; i < judgeCount; i++) {
+            address judge = getJudgeAtIndex(i);  // You'll need to implement this
+            if (dispute.hasVoted[judge] && isHumanJudge[judge]) {
+                tempJudges[humanJudgeCount] = judge;
+                humanJudgeCount++;
+            }
+        }
+        
+        address[] memory humanJudges = new address[](humanJudgeCount);
+        for (uint256 i = 0; i < humanJudgeCount; i++) {
+            humanJudges[i] = tempJudges[i];
+        }
+        
+        return humanJudges;
+    }
+
+    function getJudgeAtIndex(uint256 index) public view returns (address) {
+        require(index < judgeList.length, "Index out of bounds");
+        return judgeList[index];
     }
 }

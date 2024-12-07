@@ -17,13 +17,15 @@ contract ERC20R is ERC20RStorage, IERC20 {
         string memory _name, 
         string memory _symbol, 
         uint256 _lockPeriod, 
-        address _judgeManager
+        address _judgeManager,
+        address _platformWallet
     ) {
         ERC20RStorage.owner = msg.sender;
         ERC20RStorage._name = _name;
         ERC20RStorage.lockPeriod = _lockPeriod;
         ERC20RStorage._symbol = _symbol;
         judgeManager = IJudgeManager(_judgeManager);
+        platformWallet = _platformWallet;
     }
 
     function transfer(address to, uint256 amount)
@@ -34,6 +36,7 @@ contract ERC20R is ERC20RStorage, IERC20 {
     {   
         require(to != address(0), ERC20RStorage.ZeroAddressNotAllowed());
         require(balanceOf(msg.sender) >= amount, ERC20RStorage.InsufficientBalance());
+        require(msg.sender!=to, ERC20RStorage.SenderAndAddressMustNotBeSame());
         
         userDetails[msg.sender].NRBalance -= amount;
         userDetails[to].RBalance += amount;
@@ -157,13 +160,42 @@ contract ERC20R is ERC20RStorage, IERC20 {
         if (!transaction.isDispute) revert ERC20RStorage.DisputeNotRaised();
         
         uint256 amountToReverse = transaction.amount;
+        
+        // Calculate fees
+        uint256 platformFee = (amountToReverse * PLATFORM_FEE_BPS) / BASIS_POINTS;
+        uint256 judgeFee = (amountToReverse * JUDGE_FEE_BPS) / BASIS_POINTS;
+        uint256 amountAfterFees = amountToReverse - platformFee - judgeFee;
     
+        // Update balances
         userDetails[to].RBalance -= amountToReverse;
-        userDetails[from].NRBalance += amountToReverse;
+        userDetails[from].NRBalance += amountAfterFees;
+        userDetails[platformWallet].NRBalance += platformFee + judgeFee;  // Temporarily store all fees
         
         delete lockedTransactions[from][to][index];
         
-        emit ERC20RStorage.TransactionReversed(from, to, index, amountToReverse);
+        // Get human judges from JudgeManager and distribute fees
+        address[] memory humanJudges = judgeManager.getHumanJudgesForDispute(index);
+        if (humanJudges.length > 0) {
+            uint256 feePerJudge = judgeFee / humanJudges.length;
+            
+            // Distribute fees to human judges
+            for(uint256 i = 0; i < humanJudges.length; i++) {
+                userDetails[platformWallet].NRBalance -= feePerJudge;
+                userDetails[humanJudges[i]].NRBalance += feePerJudge;
+            }
+            
+            // Handle any remaining dust
+            uint256 remainingFees = judgeFee - (feePerJudge * humanJudges.length);
+            if (remainingFees > 0) {
+                userDetails[platformWallet].NRBalance -= remainingFees;
+                userDetails[humanJudges[0]].NRBalance += remainingFees;
+            }
+            
+            emit JudgeFeesDistributed(humanJudges, feePerJudge, judgeFee);
+        }
+        
+        emit TransactionReversed(from, to, index, amountToReverse);
+        emit FeesDistributed(from, platformWallet, platformFee, judgeFee);
         return true;
     }
 
@@ -178,6 +210,32 @@ contract ERC20R is ERC20RStorage, IERC20 {
         userDetails[to].NRBalance += amount;
         
         emit ERC20RStorage.TransactionReverseRejected(from, to, index);
+        return true;
+    }
+
+    function distributeJudgeFees(address[] calldata humanJudges, uint256 totalFeeAmount) public returns (bool) {
+        require(msg.sender == platformWallet, "Only platform wallet can distribute fees");
+        require(humanJudges.length > 0, "No judges provided");
+        require(userDetails[platformWallet].NRBalance >= totalFeeAmount, "Insufficient fee balance");
+        
+        uint256 feePerJudge = totalFeeAmount / humanJudges.length;
+        require(feePerJudge > 0, "Fee per judge too small");
+        
+        // Distribute fees equally among judges
+        for(uint256 i = 0; i < humanJudges.length; i++) {
+            require(humanJudges[i] != address(0), "Invalid judge address");
+            userDetails[platformWallet].NRBalance -= feePerJudge;
+            userDetails[humanJudges[i]].NRBalance += feePerJudge;
+        }
+        
+        // Handle any remaining dust (due to division)
+        uint256 remainingFees = totalFeeAmount - (feePerJudge * humanJudges.length);
+        if (remainingFees > 0) {
+            userDetails[platformWallet].NRBalance -= remainingFees;
+            userDetails[humanJudges[0]].NRBalance += remainingFees;
+        }
+        
+        emit ERC20RStorage.JudgeFeesDistributed(humanJudges, feePerJudge, totalFeeAmount);
         return true;
     }
 }

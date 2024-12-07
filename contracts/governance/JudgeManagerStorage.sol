@@ -22,6 +22,8 @@ abstract contract JudgeManagerStorage {
     mapping(address => bool) public judges;
     uint256 public judgeCount;
     mapping(uint256 => Dispute) public disputes;
+    mapping(address => bool) public isHumanJudge;
+    address[] public judgeList;
     uint256 public disputeCount;
     uint256 public constant VOTING_PERIOD = 5 minutes;
 

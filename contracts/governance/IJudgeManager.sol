@@ -8,7 +8,7 @@ interface IJudgeManager {
         FAIL
     }
 
-    function addJudge(address _judge) external;
+    function addJudge(address _judge, bool _isHuman) external;
     function removeJudge(address _judge) external;
     function isJudge(address _account) external view returns (bool);
     
@@ -34,4 +34,6 @@ interface IJudgeManager {
             uint256 createdAt,
             DisputeState state
         );
+    
+    function getHumanJudgesForDispute(uint256 disputeId) external view returns (address[] memory);
 }
