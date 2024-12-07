@@ -173,6 +173,9 @@ contract ERC20R is ERC20RStorage, IERC20 {
         if (!transaction.isDispute) revert ERC20RStorage.DisputeNotRaised();
         
         transaction.isDispute = false;
+        uint256 amount = transaction.amount;
+        userDetails[to].RBalance -= amount;
+        userDetails[to].NRBalance += amount;
         
         emit ERC20RStorage.TransactionReverseRejected(from, to, index);
         return true;

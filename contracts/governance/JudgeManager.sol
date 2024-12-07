@@ -6,7 +6,7 @@ import {JudgeManagerStorage} from "./JudgeManagerStorage.sol";
 import "../reversible/ERC20R.sol";
 
 contract JudgeManager is JudgeManagerStorage, IJudgeManager {
-    constructor () {
+    constructor() {
         owner = msg.sender;
     }
 
@@ -24,7 +24,7 @@ contract JudgeManager is JudgeManagerStorage, IJudgeManager {
     }
 
     function removeJudge(address _judge) external override {
-        if (msg.sender == owner) revert OnlyOwner();
+        if (msg.sender != owner) revert OnlyOwner();
         if (!judges[_judge]) revert NotJudge();
         judges[_judge] = false;
         judgeCount--;
@@ -48,59 +48,100 @@ contract JudgeManager is JudgeManagerStorage, IJudgeManager {
         dispute.from = _from;
         dispute.to = _to;
         dispute.createdAt = block.timestamp;
-        dispute.resolved = false;
+        dispute.state = DisputeState.PENDING;
 
         emit DisputeCreated(disputeCount, msg.sender, _token);
         return disputeCount;
     }
 
-    function vote(uint256 _disputeId, bool _support) external override onlyJudge {
+    function voteAndResolve(
+        uint256 _disputeId,
+        DisputeState _vote
+    ) external override onlyJudge {
         Dispute storage dispute = disputes[_disputeId];
-        
-        if (dispute.resolved) revert DisputeAlreadyResolved();
-        if (block.timestamp > dispute.createdAt + VOTING_PERIOD) revert VotingPeriodEnded();
+
+        // Check if dispute exists
+        if (_disputeId == 0 || _disputeId > disputeCount)
+            revert DisputeNotExists();
+        // Check if dispute is not pending
+        if (dispute.state != DisputeState.PENDING)
+            revert DisputeAlreadyResolved();
+
+        // Check if judge has already voted
         if (dispute.hasVoted[msg.sender]) revert AlreadyVoted();
 
+        // Ensure vote is valid (not PENDING)
+        if (_vote == DisputeState.PENDING) revert("Invalid vote type");
+
+        // Record the vote
         dispute.hasVoted[msg.sender] = true;
-        dispute.votes[msg.sender] = _support;
-        
-        if (_support) {
+        dispute.votes[msg.sender] = _vote;
+
+        // Update vote counts
+        if (_vote == DisputeState.PASS) {
             dispute.votesFor++;
-        } else {
+        } else if (_vote == DisputeState.FAIL) {
             dispute.votesAgainst++;
         }
 
-        emit VoteCast(_disputeId, msg.sender, _support);
-    }
+        emit VoteCast(_disputeId, msg.sender, _vote == DisputeState.PASS);
 
-    function executeDispute(uint256 _disputeId) external override {
-        Dispute storage dispute = disputes[_disputeId];
+        bool isVotingPeriodOver = block.timestamp >
+            dispute.createdAt + VOTING_PERIOD;
 
-        if (dispute.resolved) revert DisputeAlreadyResolved();
-        bool result = dispute.votesFor > judgeCount / 2;
-       
-        if (!result && block.timestamp <= dispute.createdAt + VOTING_PERIOD) revert VotingPeriodNotEnded();
-
-        if (result) {
-            ERC20R(dispute.token).reverseTransaction(
-                dispute.transferIndex,
-                dispute.from,
-                dispute.to
-            );
-        } else {
-            ERC20R(dispute.token).rejectReverseTransaction(
-                dispute.transferIndex,
-                dispute.from,
-                dispute.to
-            );
+        // During voting period - check for immediate majority
+        if (!isVotingPeriodOver) {
+            // Case 1: More than 50% judges voted PASS
+            if (dispute.votesFor > judgeCount / 2) {
+                dispute.state = DisputeState.PASS;
+                ERC20R(dispute.token).reverseTransaction(
+                    dispute.transferIndex,
+                    dispute.from,
+                    dispute.to
+                );
+                emit DisputeResolved(_disputeId, true);
+                return;
+            }
+            // Case 2: More than 50% judges voted FAIL
+            if (dispute.votesAgainst > judgeCount / 2) {
+                dispute.state = DisputeState.FAIL;
+                ERC20R(dispute.token).rejectReverseTransaction(
+                    dispute.transferIndex,
+                    dispute.from,
+                    dispute.to
+                );
+                emit DisputeResolved(_disputeId, false);
+                return;
+            }
         }
 
-        emit DisputeResolved(_disputeId, result);
+        // After voting period ends
+        if (isVotingPeriodOver) {
+            if (dispute.votesFor > dispute.votesAgainst) {
+                dispute.state = DisputeState.PASS;
+                ERC20R(dispute.token).reverseTransaction(
+                    dispute.transferIndex,
+                    dispute.from,
+                    dispute.to
+                );
+                emit DisputeResolved(_disputeId, true);
+            } else {
+                dispute.state = DisputeState.FAIL;
+                ERC20R(dispute.token).rejectReverseTransaction(
+                    dispute.transferIndex,
+                    dispute.from,
+                    dispute.to
+                );
+                emit DisputeResolved(_disputeId, false);
+            }
+        }
     }
 
-    function getDisputeDetails(uint256 _disputeId) 
-        external 
-        view 
+    function getDisputeDetails(
+        uint256 _disputeId
+    )
+        external
+        view
         override
         returns (
             address token,
@@ -110,8 +151,8 @@ contract JudgeManager is JudgeManagerStorage, IJudgeManager {
             uint256 votesFor,
             uint256 votesAgainst,
             uint256 createdAt,
-            bool resolved
-        ) 
+            DisputeState state
+        )
     {
         Dispute storage dispute = disputes[_disputeId];
         return (
@@ -122,7 +163,11 @@ contract JudgeManager is JudgeManagerStorage, IJudgeManager {
             dispute.votesFor,
             dispute.votesAgainst,
             dispute.createdAt,
-            dispute.resolved
+            dispute.state
         );
+    }
+
+    function getDisputeCount() public view returns (uint256) {
+        return disputeCount;
     }
 }
