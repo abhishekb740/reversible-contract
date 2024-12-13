@@ -9,13 +9,13 @@ contract ERC20R is ERC20RStorage, IERC20 {
     IJudgeManager public judgeManager;
 
     modifier onlyJudgeManager() {
-        if (msg.sender != address(judgeManager)) revert ERC20RStorage.OnlyJudgeManager();
+        require(msg.sender == address(judgeManager), ERC20RStorage.OnlyJudgeManager());
         _;
     }
 
     constructor(
         string memory _name, 
-        string memory _symbol, 
+        string memory _symbol,
         uint256 _lockPeriod, 
         address _judgeManager,
         address _platformWallet
@@ -146,45 +146,40 @@ contract ERC20R is ERC20RStorage, IERC20 {
 
     function raiseDispute(uint256 index, address from, address to) public returns (uint256) {
         TransactionDetails storage transaction = lockedTransactions[from][to][index];
-        if (transaction.amount == 0) revert ERC20RStorage.TransactionNotFound();
-        if (msg.sender != from) revert ERC20RStorage.OnlySenderCanRaiseDispute();
-        if (transaction.isDispute) revert ERC20RStorage.DisputeAlreadyRaised();
+        require(transaction.amount!=0, ERC20RStorage.TransactionNotFound());
+        require(msg.sender==from, ERC20RStorage.OnlySenderCanRaiseDispute());
+        require(transaction.isDispute==false, ERC20RStorage.DisputeAlreadyRaised());
 
         transaction.isDispute = true;
         return judgeManager.createDispute(address(this), index, from, to);
     }
 
-    function reverseTransaction(uint256 index, address from, address to) public onlyJudgeManager returns (bool) {
+    function reverseTransaction(uint256 index, address from, address to, uint256 disputeId) public onlyJudgeManager returns (bool) {
         TransactionDetails storage transaction = lockedTransactions[from][to][index];
-        if (transaction.amount == 0) revert ERC20RStorage.TransactionNotFound();
-        if (!transaction.isDispute) revert ERC20RStorage.DisputeNotRaised();
+        require(transaction.amount!=0, ERC20RStorage.TransactionNotFound());
+        require(transaction.isDispute==true, ERC20RStorage.DisputeNotRaised());
         
         uint256 amountToReverse = transaction.amount;
         
-        // Calculate fees
         uint256 platformFee = (amountToReverse * PLATFORM_FEE_BPS) / BASIS_POINTS;
         uint256 judgeFee = (amountToReverse * JUDGE_FEE_BPS) / BASIS_POINTS;
         uint256 amountAfterFees = amountToReverse - platformFee - judgeFee;
     
-        // Update balances
         userDetails[to].RBalance -= amountToReverse;
         userDetails[from].NRBalance += amountAfterFees;
-        userDetails[platformWallet].NRBalance += platformFee + judgeFee;  // Temporarily store all fees
+        userDetails[platformWallet].NRBalance += platformFee + judgeFee;
         
         delete lockedTransactions[from][to][index];
         
-        // Get human judges from JudgeManager and distribute fees
-        address[] memory humanJudges = judgeManager.getHumanJudgesForDispute(index);
+        address[] memory humanJudges = judgeManager.getHumanJudgesForDispute(disputeId);
         if (humanJudges.length > 0) {
             uint256 feePerJudge = judgeFee / humanJudges.length;
             
-            // Distribute fees to human judges
             for(uint256 i = 0; i < humanJudges.length; i++) {
                 userDetails[platformWallet].NRBalance -= feePerJudge;
                 userDetails[humanJudges[i]].NRBalance += feePerJudge;
             }
             
-            // Handle any remaining dust
             uint256 remainingFees = judgeFee - (feePerJudge * humanJudges.length);
             if (remainingFees > 0) {
                 userDetails[platformWallet].NRBalance -= remainingFees;
@@ -201,8 +196,8 @@ contract ERC20R is ERC20RStorage, IERC20 {
 
     function rejectReverseTransaction(uint256 index, address from, address to) public onlyJudgeManager returns (bool) {
         TransactionDetails storage transaction = lockedTransactions[from][to][index];
-        if (transaction.amount == 0) revert ERC20RStorage.TransactionNotFound();
-        if (!transaction.isDispute) revert ERC20RStorage.DisputeNotRaised();
+        require(transaction.amount!=0, ERC20RStorage.TransactionNotFound());
+        require(transaction.isDispute==true, ERC20RStorage.DisputeNotRaised());
         
         transaction.isDispute = false;
         uint256 amount = transaction.amount;
@@ -210,32 +205,6 @@ contract ERC20R is ERC20RStorage, IERC20 {
         userDetails[to].NRBalance += amount;
         
         emit ERC20RStorage.TransactionReverseRejected(from, to, index);
-        return true;
-    }
-
-    function distributeJudgeFees(address[] calldata humanJudges, uint256 totalFeeAmount) public returns (bool) {
-        require(msg.sender == platformWallet, "Only platform wallet can distribute fees");
-        require(humanJudges.length > 0, "No judges provided");
-        require(userDetails[platformWallet].NRBalance >= totalFeeAmount, "Insufficient fee balance");
-        
-        uint256 feePerJudge = totalFeeAmount / humanJudges.length;
-        require(feePerJudge > 0, "Fee per judge too small");
-        
-        // Distribute fees equally among judges
-        for(uint256 i = 0; i < humanJudges.length; i++) {
-            require(humanJudges[i] != address(0), "Invalid judge address");
-            userDetails[platformWallet].NRBalance -= feePerJudge;
-            userDetails[humanJudges[i]].NRBalance += feePerJudge;
-        }
-        
-        // Handle any remaining dust (due to division)
-        uint256 remainingFees = totalFeeAmount - (feePerJudge * humanJudges.length);
-        if (remainingFees > 0) {
-            userDetails[platformWallet].NRBalance -= remainingFees;
-            userDetails[humanJudges[0]].NRBalance += remainingFees;
-        }
-        
-        emit ERC20RStorage.JudgeFeesDistributed(humanJudges, feePerJudge, totalFeeAmount);
         return true;
     }
 }

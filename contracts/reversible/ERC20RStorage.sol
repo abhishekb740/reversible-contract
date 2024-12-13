@@ -8,9 +8,9 @@ contract ERC20RStorage {
     uint256 public lockPeriod;
     address public owner;
     address public platformWallet;
-    uint256 public constant PLATFORM_FEE_BPS = 50; // 0.5%
-    uint256 public constant JUDGE_FEE_BPS = 150; // 1.5%
-    uint256 public constant BASIS_POINTS = 10000; // 100%
+    uint256 public constant PLATFORM_FEE_BPS = 50;
+    uint256 public constant JUDGE_FEE_BPS = 150;
+    uint256 public constant BASIS_POINTS = 10000;
 
     error ZeroAddressNotAllowed();
     error InsufficientBalance();

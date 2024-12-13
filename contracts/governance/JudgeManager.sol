@@ -11,13 +11,13 @@ contract JudgeManager is JudgeManagerStorage, IJudgeManager {
     }
 
     modifier onlyJudge() {
-        if (!judges[msg.sender]) revert NotJudge();
+        require(judges[msg.sender], NotJudge());
         _;
     }
 
     function addJudge(address _judge, bool _isHuman) external override {
-        if (msg.sender != owner) revert OnlyOwner();
-        if (judges[_judge]) revert AlreadyJudge();
+        require(msg.sender==owner, OnlyOwner());
+        require(judges[_judge]==false, AlreadyJudge());
         
         judges[_judge] = true;
         isHumanJudge[_judge] = _isHuman;
@@ -28,14 +28,13 @@ contract JudgeManager is JudgeManagerStorage, IJudgeManager {
     }
 
     function removeJudge(address _judge) external override {
-        if (msg.sender != owner) revert OnlyOwner();
-        if (!judges[_judge]) revert NotJudge();
+        require(msg.sender==owner, OnlyOwner());
+        require(judges[_judge]==true, NotJudge());
         
         judges[_judge] = false;
         isHumanJudge[_judge] = false;
         judgeCount--;
         
-        // Remove from judgeList (optional, but gas intensive)
         for (uint256 i = 0; i < judgeList.length; i++) {
             if (judgeList[i] == _judge) {
                 judgeList[i] = judgeList[judgeList.length - 1];
@@ -76,24 +75,14 @@ contract JudgeManager is JudgeManagerStorage, IJudgeManager {
     ) external override onlyJudge {
         Dispute storage dispute = disputes[_disputeId];
 
-        // Check if dispute exists
-        if (_disputeId == 0 || _disputeId > disputeCount)
-            revert DisputeNotExists();
-        // Check if dispute is not pending
-        if (dispute.state != DisputeState.PENDING)
-            revert DisputeAlreadyResolved();
+        require(_disputeId!=0 && _disputeId<=disputeCount, DisputeNotExists());
+        require(dispute.state==DisputeState.PENDING, DisputeAlreadyResolved());
+        require(dispute.hasVoted[msg.sender]==false, AlreadyVoted());
+        require(_vote!=DisputeState.PENDING, InvalidVoteType());
 
-        // Check if judge has already voted
-        if (dispute.hasVoted[msg.sender]) revert AlreadyVoted();
-
-        // Ensure vote is valid (not PENDING)
-        if (_vote == DisputeState.PENDING) revert("Invalid vote type");
-
-        // Record the vote
         dispute.hasVoted[msg.sender] = true;
         dispute.votes[msg.sender] = _vote;
 
-        // Update vote counts
         if (_vote == DisputeState.PASS) {
             dispute.votesFor++;
         } else if (_vote == DisputeState.FAIL) {
@@ -105,20 +94,19 @@ contract JudgeManager is JudgeManagerStorage, IJudgeManager {
         bool isVotingPeriodOver = block.timestamp >
             dispute.createdAt + VOTING_PERIOD;
 
-        // During voting period - check for immediate majority
         if (!isVotingPeriodOver) {
-            // Case 1: More than 50% judges voted PASS
             if (dispute.votesFor > judgeCount / 2) {
                 dispute.state = DisputeState.PASS;
                 ERC20R(dispute.token).reverseTransaction(
                     dispute.transferIndex,
                     dispute.from,
-                    dispute.to
+                    dispute.to,
+                    _disputeId
                 );
                 emit DisputeResolved(_disputeId, true);
                 return;
             }
-            // Case 2: More than 50% judges voted FAIL
+
             if (dispute.votesAgainst > judgeCount / 2) {
                 dispute.state = DisputeState.FAIL;
                 ERC20R(dispute.token).rejectReverseTransaction(
@@ -131,14 +119,14 @@ contract JudgeManager is JudgeManagerStorage, IJudgeManager {
             }
         }
 
-        // After voting period ends
         if (isVotingPeriodOver) {
             if (dispute.votesFor > dispute.votesAgainst) {
                 dispute.state = DisputeState.PASS;
                 ERC20R(dispute.token).reverseTransaction(
                     dispute.transferIndex,
                     dispute.from,
-                    dispute.to
+                    dispute.to,
+                    _disputeId
                 );
                 emit DisputeResolved(_disputeId, true);
             } else {
@@ -190,13 +178,11 @@ contract JudgeManager is JudgeManagerStorage, IJudgeManager {
     function getHumanJudgesForDispute(uint256 _disputeId) external view returns (address[] memory) {
         Dispute storage dispute = disputes[_disputeId];
         
-        // First, count how many human judges voted
         uint256 humanJudgeCount = 0;
         address[] memory tempJudges = new address[](judgeCount);
         
-        // Iterate through all judges to find human judges who voted
         for (uint256 i = 0; i < judgeCount; i++) {
-            address judge = getJudgeAtIndex(i);  // You'll need to implement this
+            address judge = getJudgeAtIndex(i);
             if (dispute.hasVoted[judge] && isHumanJudge[judge]) {
                 tempJudges[humanJudgeCount] = judge;
                 humanJudgeCount++;
@@ -212,7 +198,7 @@ contract JudgeManager is JudgeManagerStorage, IJudgeManager {
     }
 
     function getJudgeAtIndex(uint256 index) public view returns (address) {
-        require(index < judgeList.length, "Index out of bounds");
+        require(index < judgeList.length, InvalidIndex());
         return judgeList[index];
     }
 }

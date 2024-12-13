@@ -25,7 +25,7 @@ abstract contract JudgeManagerStorage {
     mapping(address => bool) public isHumanJudge;
     address[] public judgeList;
     uint256 public disputeCount;
-    uint256 public constant VOTING_PERIOD = 5 minutes;
+    uint256 public constant VOTING_PERIOD = 18 hours;
 
     event JudgeAdded(address indexed judge);
     event JudgeRemoved(address indexed judge);
@@ -46,4 +46,6 @@ abstract contract JudgeManagerStorage {
     error AlreadyVoted();
     error InvalidVotingPeriod();
     error OnlyOwner();
+    error InvalidVoteType();
+    error InvalidIndex();
 }
